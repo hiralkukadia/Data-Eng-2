@@ -19,18 +19,7 @@ print(df.columns.tolist())
 print("\nPreview:")
 print(df.head())
 
-
-# =========================================================
-# FIND DATE COLUMN
-# =========================================================
-
 date_column = "timestamp"
-
-# =========================================================
-# CONVERT TO DATETIME
-# =========================================================
-
-df[date_column] = pd.to_datetime(df[date_column])
 
 # =========================================================
 # CREATE PARTITION COLUMNS
