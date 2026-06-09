@@ -237,3 +237,83 @@ result = con.execute("""
 """).df()
 
 print(result)
+
+import duckdb
+import sqlite3
+import pandas as pd
+import time
+import warnings
+warnings.filterwarnings('ignore')
+
+# ── Setup ──────────────────────────────────────────────────────────────────────
+
+PARQUET = '/content/team_2.parquet'
+df = pd.read_parquet(PARQUET)
+
+results = {}
+
+# ── 1. DuckDB ──────────────────────────────────────────────────────────────────
+
+duck = duckdb.connect()
+
+start = time.perf_counter()
+duck.execute("""
+    SELECT
+        YEAR(timestamp::TIMESTAMPTZ)  AS year,
+        MONTH(timestamp::TIMESTAMPTZ) AS month,
+        station_id,
+        pollutant,
+        ROUND(AVG(value), 2)          AS avg_value,
+        ROUND(MAX(value), 2)          AS max_value,
+        COUNT(*)                      AS readings
+    FROM read_parquet('/content/team_2.parquet')
+    GROUP BY 1, 2, 3, 4
+    ORDER BY 1, 2
+""").df()
+results['DuckDB'] = round(time.perf_counter() - start, 4)
+
+# ── 2. Pandas ──────────────────────────────────────────────────────────────────
+
+start = time.perf_counter()
+df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+df['year']      = df['timestamp'].dt.year
+df['month']     = df['timestamp'].dt.month
+df.groupby(['year', 'month', 'station_id', 'pollutant'])['value'].agg(
+    avg_value='mean', max_value='max', readings='count'
+).reset_index()
+results['Pandas'] = round(time.perf_counter() - start, 4)
+
+# ── 3. SQLite ──────────────────────────────────────────────────────────────────
+
+sqlite = sqlite3.connect(':memory:')
+
+# Load data in (include load time — this is the real cost of row-based DBs)
+start = time.perf_counter()
+df['timestamp_str'] = df['timestamp'].astype(str)
+df.to_sql('measurements', sqlite, if_exists='replace', index=False)
+sqlite.execute("""
+    SELECT
+        strftime('%Y', timestamp_str) AS year,
+        strftime('%m', timestamp_str) AS month,
+        station_id,
+        pollutant,
+        ROUND(AVG(value), 2)          AS avg_value,
+        ROUND(MAX(value), 2)          AS max_value,
+        COUNT(*)                      AS readings
+    FROM measurements
+    GROUP BY 1, 2, 3, 4
+    ORDER BY 1, 2
+""").fetchall()
+results['SQLite'] = round(time.perf_counter() - start, 4)
+
+# ── Results ────────────────────────────────────────────────────────────────────
+
+print("\n" + "="*45)
+print(f"{'Database':<12} {'Time (seconds)':>15} {'vs DuckDB':>12}")
+print("="*45)
+baseline = results['DuckDB']
+for db, t in sorted(results.items(), key=lambda x: x[1]):
+    ratio = f"{t/baseline:.1f}x slower" if t > baseline else "◀ fastest"
+    print(f"{db:<12} {t:>15.4f} {ratio:>12}")
+print("="*45)
+print(f"\nRow count: {len(df):,}")
